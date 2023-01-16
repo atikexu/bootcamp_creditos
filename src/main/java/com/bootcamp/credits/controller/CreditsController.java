@@ -112,47 +112,35 @@ public class CreditsController {
 	
 	@PutMapping("/updatepay/{id}")
 	public Mono<ResponseEntity<Map<String, Object>>> saveCreditsPay(@RequestBody Credits credits , @PathVariable String id){
-		logger.info("Run process /saveCreditsPay");
-		Map<String, Object> response = new HashMap<>();
-		
-		return creditsService.findById(id).flatMap(p -> {
-			Double mount=credits.getAmountPaid()+p.getAmountPaid();
-			response.put("message", Constants.MESSAGE_PAY_NOOK);
-			if(mount<=p.getAmountToPay()) {
-				p.setAmountPaid(credits.getAmountPaid()+p.getAmountPaid());
-				response.put("message", Constants.MESSAGE_PAY_OK);
-			}
-			return creditsService.save(p).map(c -> {
-				response.put("credit", c);
-				performDeposit(c.getId(), c.getAmountToPay(),c.getCustomerId());
-//				TransactionCreateRequest transactionCreateRequest = TransactionCreateRequest.builder()
-//                        .transactionType(TransactionType.PAGO)
-//                        .productId(c.getId())
-//                        .customerId(c.getCustomerId())
-//                        .amount(c.getAmountToPay())
-//                        .productType(c.getTypeAccount())
-//                        .build();
-//				sendPayloadToTransactions(transactionCreateRequest).map(t -> {
-//                    return c;
-//                });
-			
-				return ResponseEntity
-						.created(URI.create("/credit/updatepay/".concat(c.getId())))
-						.contentType(MediaType.APPLICATION_JSON)
-						.body(response);
-			});
-		}).onErrorResume(t -> {
-			return Mono.just(t).cast(WebExchangeBindException.class)
-					.flatMap(e -> Mono.just(e.getFieldErrors()))
-					.flatMapMany(Flux::fromIterable)
-					.map(fieldError -> "the field "+fieldError.getField() + " "+ fieldError.getDefaultMessage())
-					.collectList()
-					.flatMap(list -> {
-						response.put("errors", list);
-						response.put("status", HttpStatus.BAD_REQUEST.value());
-						return Mono.just(ResponseEntity.badRequest().body(response));
-					});
-		});
+	   logger.info("Run process /saveCreditsPay");
+	   Map<String, Object> response = new HashMap<>();
+	   
+	   return creditsService.findById(id).flatMap(p -> {
+	      Double mount=credits.getAmountPaid()+p.getAmountPaid();
+	      response.put("message", Constants.MESSAGE_PAY_NOOK);
+	      if(mount<=p.getAmountToPay()) {
+	         p.setAmountPaid(credits.getAmountPaid()+p.getAmountPaid());
+	         response.put("message", Constants.MESSAGE_PAY_OK);
+	      }
+	      return creditsService.save(p).flatMap(c -> {
+	         response.put("credit", c);
+	         return performDeposit(c.getId(), c.getAmountToPay(),c.getCustomerId()).map(agg -> ResponseEntity
+	               .created(URI.create("/credit/updatepay/".concat(c.getId())))
+	               .contentType(MediaType.APPLICATION_JSON)
+	               .body(response));
+	      });
+	   }).onErrorResume(t -> {
+	      return Mono.just(t).cast(WebExchangeBindException.class)
+	            .flatMap(e -> Mono.just(e.getFieldErrors()))
+	            .flatMapMany(Flux::fromIterable)
+	            .map(fieldError -> "the field "+fieldError.getField() + " "+ fieldError.getDefaultMessage())
+	            .collectList()
+	            .flatMap(list -> {
+	               response.put("errors", list);
+	               response.put("status", HttpStatus.BAD_REQUEST.value());
+	               return Mono.just(ResponseEntity.badRequest().body(response));
+	            });
+	   });
 	}
 	
 	 private Mono<TransactionEntity> sendPayloadToTransactions(TransactionCreateRequest transactionCreateRequest){

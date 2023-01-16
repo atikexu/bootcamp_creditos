@@ -5,9 +5,11 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -17,10 +19,11 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.support.WebExchangeBindException;
+import org.springframework.web.reactive.function.client.WebClient;
 
 import com.bootcamp.credits.dto.TransactionCreateRequest;
+import com.bootcamp.credits.dto.TransactionEntity;
 import com.bootcamp.credits.enums.TransactionType;
-//import com.bootcamp.credits.feign.TransactionFeign;
 import com.bootcamp.credits.model.CreditCard;
 import com.bootcamp.credits.service.CreditCardService;
 
@@ -36,9 +39,6 @@ import org.slf4j.LoggerFactory;
 public class CreditCardController {
 	@Autowired
 	private CreditCardService creditCardService;
-	
-//	@Autowired
-//	private TransactionFeign transactionFeign;
 	
 	private final Logger logger = LoggerFactory.getLogger(CreditCardController.class);
 	
@@ -118,20 +118,12 @@ public class CreditCardController {
 				p.setAmountPaid(credits.getAmountPaid()+p.getAmountPaid());
 				response.put("message", "Payment made successfully");
 			}
-			return creditCardService.save(p).map(c -> {
-				TransactionCreateRequest transactionCreateRequest = TransactionCreateRequest.builder()
-                        .transactionType(TransactionType.DEPOSITO)
-                        .productId(c.getId())
-                        .customerId(c.getCustomerId())
-                        .amount(c.getAmountToPay())
-                        .productType(c.getTypeAccount())
-                        .build();
-//				transactionFeign.save(transactionCreateRequest);
+			return creditCardService.save(p).flatMap(c -> {
 				response.put("credit", c);
-				return ResponseEntity
-						.created(URI.create("/credit/updatecardpay/".concat(c.getId())))
-						.contentType(MediaType.APPLICATION_JSON)
-						.body(response);
+				return performDeposit(c.getId(), c.getAmountToPay(),c.getCustomerId()).map(agg -> ResponseEntity
+			               .created(URI.create("/creditcard/updatecardpay/".concat(c.getId())))
+			               .contentType(MediaType.APPLICATION_JSON)
+			               .body(response));
 			});
 		}).onErrorResume(t -> {
 			return Mono.just(t).cast(WebExchangeBindException.class)
@@ -147,7 +139,7 @@ public class CreditCardController {
 		});
 	}
 	
-	@PutMapping("/updatecardCons/{id}")
+	@PutMapping("/updatecardcons/{id}")
 	public Mono<ResponseEntity<Map<String, Object>>> saveCreditsCardPayCons(@RequestBody CreditCard credits , @PathVariable String id){
 		logger.info("Run process /saveCreditsCardPayCons");
 		Map<String, Object> response = new HashMap<>();
@@ -159,20 +151,12 @@ public class CreditCardController {
 				p.setAmountPaid(mount);
 				response.put("message", "successful consumption");
 			}
-			return creditCardService.save(p).map(c -> {
-				TransactionCreateRequest transactionCreateRequest = TransactionCreateRequest.builder()
-                        .transactionType(TransactionType.DEPOSITO)
-                        .productId(c.getId())
-                        .customerId(c.getCustomerId())
-                        .amount(c.getAmountToPay())
-                        .productType(c.getTypeAccount())
-                        .build();
-//				transactionFeign.save(transactionCreateRequest);
+			return creditCardService.save(p).flatMap(c -> {
 				response.put("credit", c);
-				return ResponseEntity
-						.created(URI.create("/credit/updatecardCons/".concat(c.getId())))
-						.contentType(MediaType.APPLICATION_JSON)
-						.body(response);
+				return performDeposit(c.getId(), c.getAmountToPay(),c.getCustomerId()).map(agg -> ResponseEntity
+			               .created(URI.create("/creditcard/updatecardcons/".concat(c.getId())))
+			               .contentType(MediaType.APPLICATION_JSON)
+			               .body(response));
 			});
 		}).onErrorResume(t -> {
 			return Mono.just(t).cast(WebExchangeBindException.class)
@@ -187,5 +171,44 @@ public class CreditCardController {
 					});
 		});
 	}
+	
+	private Mono<TransactionEntity> sendPayloadToTransactions(TransactionCreateRequest transactionCreateRequest){
+        WebClient webClient = WebClient.create("http://localhost:8084");
+        return  webClient.post()
+                .uri("/transaction")
+                .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                .body(Mono.just(transactionCreateRequest), TransactionCreateRequest.class)
+                .retrieve().bodyToMono(TransactionEntity.class);
+
+    }
+
+	 @Transactional
+	public Mono<CreditCard> performDeposit(String accountId, Double amount, String customerId){
+	    Mono<CreditCard> accountMono = creditCardService.findById(accountId);
+	    return accountMono.flatMap(account -> {
+	        if(!account.getCustomerId().equals(customerId)){
+	            return Mono.error(new Exception(String.format("Account %s and customerId %s are not associated", accountId, customerId)));
+	        }
+	
+	        CreditCard newAccount;
+	
+	        newAccount = account;
+	
+	        return creditCardService.save(newAccount).flatMap(updatedAccount -> {
+	            TransactionCreateRequest transactionCreateRequest = TransactionCreateRequest.builder()
+	                    .transactionType(TransactionType.CONSUMO)
+	                    .productId(updatedAccount.getId())
+	                    .customerId(updatedAccount.getCustomerId())
+	                    .amount(amount)
+	                    .productType(updatedAccount.getTypeAccount())
+	                    .build();
+	
+	            return sendPayloadToTransactions(transactionCreateRequest).map(t -> {
+	                return updatedAccount;
+	            });
+	
+	        });
+	    });
+ }
 	
 }
